@@ -32,7 +32,7 @@
 
 | 文件 | 职责 |
 |---|---|
-| `src/index.js` | **Workers 入口**：CORS 预检、KV 绑定校验、路径前缀鉴权（含未配置警告头）、KV 初始化、路由分发、Cron 定时同步 |
+| `src/index.js` | **Workers 入口**：CORS 预检、KV 绑定校验、路径前缀鉴权（含未配置警告头）、KV 初始化、路由分发（本 fork 已移除内置 Cron 定时同步） |
 | `src/vendor/express.js` | **Express 适配**：将 Workers fetch handler 适配为类 Express 的 req/res 路由 |
 | `src/vendor/open-api.js` | **OpenAPI 适配**：KV 替代 fs 存储、fetch 替代 undici、日志/通知/推送 |
 | `src/core/app.js` | 单例 `$` 导出（`new OpenAPI('sub-store')`） |
@@ -49,7 +49,7 @@
 |---|---|
 | `esbuild.js` | **构建脚本**：4 个 esbuild 插件桥接 Workers 与上游源码；同时把上游 `createDynamicFunction` 替换为 QuickJS 沙箱执行（`SCRIPT_ENGINE=disabled` 可关闭）。开头会校验 `../Sub-Store` 的 HEAD 与 `.upstream-sha` 是否一致——本地不一致时警告（`--strict` 则失败），CI 下跳过（同步流程中不一致属正常，标记要到最后一步才更新） |
 | `.babelrc.js` | **测试用 Babel 配置**：`@/` 别名解析顺序与 esbuild 的 aliasPlugin 严格一致（Workers `src/` 优先 → 回退上游）。上游用的 `babel-plugin-relative-path-import` 在 Windows 下不做相对路径计算，故换成 `babel-plugin-module-resolver`，Linux/macOS/Windows 行为统一 |
-| `wrangler.toml` | Workers 部署配置：KV 绑定、Cron、环境变量（路径密码推荐改用 Worker Secret） |
+| `wrangler.toml` | Workers 部署配置：KV 绑定、环境变量（路径密码推荐改用 Worker Secret）；本 fork 不配置 Cron Trigger |
 | `package.json` | 依赖与脚本（`test`、`deploy`、`deploy:pages`、`rotate-secret`、`rotate-secret:sh`） |
 
 ### 3.2.1 测试（`src/test/`）
@@ -111,18 +111,9 @@ Browser → fetch()
   └─ ctx.waitUntil($.persistCache()) → 回写 KV
 ```
 
-### 4.2 Cron 定时同步
+### 4.2 Cron 定时同步（本 fork 已移除）
 
-```
-scheduled() → cronSyncArtifacts()
-  ├─ 检查 GitHub Token / artifacts
-  ├─ 预生成订阅缓存（并行）
-  ├─ 生成所有 artifacts（并行）
-  ├─ syncToGist(files)
-  ├─ 更新 artifact URL
-  ├─ gistBackupAction('upload')
-  └─ $.persistCache()
-```
+> 本 fork 删除了 `src/index.js` 中的 `scheduled()` 处理器与 `cronSyncArtifacts()`，不再在部署后自动把 artifacts 同步到 Gist，也不再自动做 Gist 备份；`wrangler.toml` 不配置 `[triggers] crons`，`/api/utils/worker-status` 的 `capabilities.cron` 恒为 `false`。Gist 备份改为经前端手动触发（`gistBackupAction`）。如需定时任务，可自行添加 Cloudflare Cron Trigger 并实现 `scheduled()`。
 
 ### 4.3 esbuild 构建管线
 
@@ -169,7 +160,7 @@ createScriptFunction(script, name)
 - **CORS**：全局 `Access-Control-Allow-Origin: *`，集中在 `src/index.js` 的 `CORS_HEADERS` 常量（便于后续单点收紧）。
   ⚠️ **与上游已分叉**：上游 2.38.x 把默认值从 `*` 收紧为白名单（`utils/cors.js`），但其唯一引用者是 `vendor/express.js`，而本项目覆盖了该文件——上游整个 `cors.js` 在产物中出现 0 次，是死代码。未设路径前缀时，任意站点的 JS 可跨域读取全部订阅配置，路径密码是当前唯一防线。收紧需要同时提供 `SUB_STORE_CORS_ALLOWED_ORIGINS` 配置入口，否则自建前端域名会失效。
 - **Script Operator 沙箱化**：构建期改写 `createDynamicFunction` 为 QuickJS WASM 沙箱执行（内存/栈/指令数限制），避免 `eval`/`new Function`；可用 `SCRIPT_ENGINE=disabled` 关闭。
-- **状态自检**：`/api/utils/worker-status` 输出 KV 绑定、鉴权、能力降级（脚本/socks/本地文件系统/cron）等运行时信息，方便部署后快速验证。
+- **状态自检**：`/api/utils/worker-status` 输出 KV 绑定、鉴权、能力降级（脚本/socks/本地文件系统等）等运行时信息，方便部署后快速验证。本 fork 已移除 cron 能力，`capabilities.cron` 恒为 `false`。
 
 ## 7. 外部依赖
 
