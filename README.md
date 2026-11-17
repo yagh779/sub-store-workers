@@ -22,7 +22,7 @@ Sub-Store 后端的 Cloudflare Workers 移植版
 
 > **注意**：一键部署按钮**仅供参考**，由于项目需要本地构建（esbuild + Sub-Store 源码），实际无法直接通过此按钮完成部署。请参照下方[手动部署步骤](#部署)。
 >
-> **自动部署**：本仓库已内置 GitHub Actions 工作流，每天自动检测上游 Sub-Store 更新并部署到 Cloudflare。只需配置 Secrets 即可开启，无需本地操作。详见 [GitHub Actions 自动同步上游](#同步更新)。
+> **自动部署**：本仓库已内置 GitHub Actions 工作流，可在 Actions 页面手动触发上游 Sub-Store 更新检测与部署到 Cloudflare。只需配置 Secrets 即可使用，无需本地操作。详见 [GitHub Actions 同步上游](#同步更新)。
 
 ## 简介
 
@@ -468,14 +468,14 @@ esbuild 构建时会从 `Sub-Store/backend/src/` 读取最新源码，重新 bui
 </details>
 
 <details>
-<summary><b>GitHub Actions 自动同步上游（推荐）</b></summary>
+<summary><b>GitHub Actions 同步上游（手动触发，推荐）</b></summary>
 
-仓库内置了 `.github/workflows/sync-upstream.yml` 工作流，每天自动检测 Sub-Store 上游更新并部署。QuickJS Script Operator 默认启用，同时工作流会自动通过 Cloudflare API 为 Pages 项目设置 `SCRIPT_ENGINE` 环境变量，无需手动配置。
+仓库内置了 `.github/workflows/sync-upstream.yml` 工作流，在 Actions 页面手动触发后检测 Sub-Store 上游更新并部署。QuickJS Script Operator 默认启用，同时工作流会自动通过 Cloudflare API 为 Pages 项目设置 `SCRIPT_ENGINE` 环境变量，无需手动配置。
 
 #### 工作流程
 
 ```
-每天 00:00（北京时间）自动触发
+在 Actions 页面手动触发（Run workflow）
   ↓
 拉取上游最新 commit，对比已部署版本
   ↓ 有更新
@@ -520,15 +520,15 @@ Account Resources 选择 **Include → 你的账号**。
 
 打开仓库 Actions 页面 → Sync Upstream Sub-Store → Run workflow → 勾选 `force = true` → Run。
 
-全部绿色即配置成功，之后每天自动运行。
+全部绿色即配置成功，之后可在 Actions 页面按需手动触发。
 
 #### 风险与失败场景
 
 | 场景 | 后果 | 处理方式 |
 |---|---|---|
-| **上游测试未通过** | 不会部署，线上不受影响 | 等上游修复后下次自动重试 |
+| **上游测试未通过** | 不会部署，线上不受影响 | 等上游修复后下次手动触发重试 |
 | **构建失败**（上游引入了 Workers 不兼容的 API） | 不会部署 | 需要手动适配 `src/` 覆盖层，提 issue |
-| **Cloudflare API 超时/限流** | 部署中断 | 下次自动重试 |
+| **Cloudflare API 超时/限流** | 部署中断 | 下次手动触发重试 |
 | **API Token 过期或权限不足** | 部署失败 | 重新创建 Token 并更新 GitHub Secret |
 | **上游大版本重构**（目录结构变化） | 构建失败 | 需要手动更新 esbuild 配置 |
 | **健康检查失败** | Workers/Pages 已部署但版本标记不更新 | 手动检查线上是否正常 |
