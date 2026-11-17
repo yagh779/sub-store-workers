@@ -103,7 +103,18 @@ export default {
             }
 
             const url = new URL(request.url);
-            let pathname = url.pathname;
+            const rawPathname = url.pathname;
+            // Decode once here so every following auth/routing decision works on
+            // the decoded path. The router (src/vendor/express.js) decodes
+            // url.pathname again; if this check kept using the raw path, requests
+            // such as /api%2fstorage or /%61pi/storage could bypass the prefix
+            // auth and the /share/ token gate.
+            let pathname;
+            try {
+                pathname = decodeURIComponent(rawPathname);
+            } catch {
+                return jsonFailure(400, 'Bad Request');
+            }
 
             // 路径前缀鉴权（可选）
             // 配置 SUB_STORE_FRONTEND_BACKEND_PATH = "/你的密码" 后
@@ -116,7 +127,9 @@ export default {
             const backendPath = normalizeBackendPath(
                 env.SUB_STORE_FRONTEND_BACKEND_PATH,
             );
-            const isPublicPath = /^\/(api\/download|api\/preview|api\/sub\/flow)/.test(pathname);
+            // Anchor with (/|$) so paths like /api/download-xxx are not treated
+            // as public endpoints.
+            const isPublicPath = /^\/(api\/download|api\/preview|api\/sub\/flow)(\/|$)/.test(pathname);
             const isManagementApi = !isPublicPath && pathname.startsWith('/api/');
             const isAuthDisabledManagementApi = !backendPath && isManagementApi;
             if (isAuthDisabledManagementApi) {
@@ -141,7 +154,14 @@ export default {
                     // 带了前缀，剥离后交给路由
                     pathname = stripBackendPath(pathname, backendPath);
                     const newUrl = new URL(request.url);
-                    newUrl.pathname = pathname;
+                    // pathname is already decoded and prefix-stripped. Re-encode it
+                    // segment by segment so the router can restore it with exactly
+                    // one decode: this avoids a second decode corrupting paths that
+                    // contain %, and also supports percent-encoded backend prefixes.
+                    newUrl.pathname = pathname
+                        .split('/')
+                        .map((seg) => encodeURIComponent(seg))
+                        .join('/');
                     // 通过密码前缀访问才注入 share 标记（与上游 be_merge 行为一致）
                     if (pathname.startsWith('/api/')) {
                         newUrl.searchParams.set('share', 'true');
@@ -173,10 +193,9 @@ export default {
                     // 未提供 token，拒绝访问
                     return jsonFailure(403, 'Share token is required');
                 }
-                const decodedPathname = decodeURIComponent(pathname);
                 const shareToken = consumeShareToken({
                     token: tokenValue,
-                    pathname: decodedPathname,
+                    pathname,
                 });
                 if (!shareToken) {
                     // token 无效

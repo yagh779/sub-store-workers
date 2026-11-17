@@ -106,6 +106,12 @@ async function initQuickJS() {
         }
         return false;
     });
+    // Reset the interrupt counter before each script execution / function call.
+    // Otherwise several normal scripts accumulate up to 100000 interrupts and a
+    // later legitimate script is wrongly treated as an infinite loop.
+    globalThis.__quickjsResetInterrupt = function () {
+        __interruptCounter = 0;
+    };
 
     const context = runtime.newContext();
 
@@ -199,6 +205,7 @@ async function executeInSandbox(script, name, api) {
         // 用 IIFE 包裹：先执行 script（定义函数），再返回名为 name 的函数。
         // 注意：用户脚本可能含注释行和多种声明，func 模式失败后会自动回退 nodeFunc。
         var wrappedScript = '(function(){\n' + script + '\nreturn ' + name + ';\n})()';
+        if (globalThis.__quickjsResetInterrupt) globalThis.__quickjsResetInterrupt();
         var evalResult = context.evalCode(wrappedScript);
 
         if (evalResult.error) {
@@ -213,7 +220,6 @@ async function executeInSandbox(script, name, api) {
         if (fnType !== 'function') {
             var actualValue = context.dump(fnHandle);
             fnHandle.dispose();
-            context.dispose();
             throw new Error(
                 '\'' + name + '\' is not a function (got ' + fnType +
                 (actualValue !== undefined ? ': ' + JSON.stringify(actualValue).slice(0, 200) : '') + ')'
@@ -256,6 +262,7 @@ function cleanup() {
  * @returns {*} 宿主环境结果
  */
 async function callSandboxFunction(context, runtime, fnHandle, callArgs) {
+    if (globalThis.__quickjsResetInterrupt) globalThis.__quickjsResetInterrupt();
     var callResult = context.callFunction(fnHandle, context.null, callArgs);
 
     // 释放输入参数
@@ -433,7 +440,9 @@ function createScriptFunction(script, name, $arguments, $options) {
                     funcErrMsg.indexOf("$server is not defined") !== -1 ||
                     funcErrMsg.indexOf("'$server' is not defined") !== -1 ||
                     funcErrMsg.indexOf("$content is not defined") !== -1 ||
+                    funcErrMsg.indexOf("'$content' is not defined") !== -1 ||
                     funcErrMsg.indexOf("$files is not defined") !== -1 ||
+                    funcErrMsg.indexOf("'$files' is not defined") !== -1 ||
                     _hasContent
                 ) {
                     shouldFallback = true;

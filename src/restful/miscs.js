@@ -17,6 +17,7 @@ import Gist from '@/utils/gist';
 import migrate from '@/utils/migration';
 import env from '@/utils/env';
 import { formatDateTime } from '@/utils';
+import { normalizeBackendPath } from '@/utils/backend-path';
 
 export default function register($app) {
     // utils
@@ -46,13 +47,13 @@ export default function register($app) {
                 let { content } = req.body;
                 try {
                     content = JSON.parse(Base64.decode(content));
-                    if (!(Object.keys(content.settings).length >= 0)) {
+                    if (!content || typeof content !== 'object' || !content.settings || typeof content.settings !== 'object') {
                         throw new Error('备份文件应该至少包含 settings 字段');
                     }
                 } catch (err) {
                     try {
                         content = JSON.parse(content);
-                        if (!(Object.keys(content.settings).length >= 0)) {
+                        if (!content || typeof content !== 'object' || !content.settings || typeof content.settings !== 'object') {
                             throw new Error(
                                 '备份文件应该至少包含 settings 字段',
                             );
@@ -156,7 +157,9 @@ function getEnv(req, res) {
 
 function getWorkerStatus(req, res) {
     const workerEnv = globalThis.__workerEnv || {};
-    const backendPath = workerEnv.SUB_STORE_FRONTEND_BACKEND_PATH;
+    const backendPath = normalizeBackendPath(
+        workerEnv.SUB_STORE_FRONTEND_BACKEND_PATH,
+    );
     const kv = workerEnv.SUB_STORE_DATA;
     const dataKeys = {
         subStore: $.cache && Object.keys($.cache).length > 0,
@@ -217,7 +220,7 @@ async function refresh(_, res) {
 
 async function gistBackupAction(action, keep, encode) {
     // read token
-    const { gistToken, syncPlatform } = $.read(SETTINGS_KEY);
+    const { gistToken, syncPlatform } = $.read(SETTINGS_KEY) || {};
     if (!gistToken) throw new Error('GitHub Token is required for backup!');
 
     const gist = new Gist({
@@ -229,7 +232,7 @@ async function gistBackupAction(action, keep, encode) {
     currentContent = currentContent ? JSON.parse(currentContent) : {};
     if (isNodeOrWorker()) currentContent = JSON.parse(JSON.stringify($.cache));
     let content;
-    const settings = $.read(SETTINGS_KEY);
+    const settings = $.read(SETTINGS_KEY) || {};
     const updated = settings.syncTime;
 
     const encoding = encode || settings.gistUpload || 'base64';
@@ -294,13 +297,13 @@ async function gistBackupAction(action, keep, encode) {
             content = await gist.download(GIST_BACKUP_FILE_NAME);
             try {
                 content = JSON.parse(Base64.decode(content));
-                if (!(Object.keys(content.settings).length >= 0)) {
+                if (!content || typeof content !== 'object' || !content.settings || typeof content.settings !== 'object') {
                     throw new Error('备份文件应该至少包含 settings 字段');
                 }
             } catch (err) {
                 try {
                     content = JSON.parse(content);
-                    if (!(Object.keys(content.settings).length >= 0)) {
+                    if (!content || typeof content !== 'object' || !content.settings || typeof content.settings !== 'object') {
                         throw new Error('备份文件应该至少包含 settings 字段');
                     }
                 } catch (err) {
@@ -335,7 +338,7 @@ async function gistBackupAction(action, keep, encode) {
 async function gistBackup(req, res) {
     const { action, keep, encode } = req.query;
     // read token
-    const { gistToken } = $.read(SETTINGS_KEY);
+    const { gistToken } = $.read(SETTINGS_KEY) || {};
     if (!gistToken) {
         failed(
             res,

@@ -212,19 +212,6 @@ function createTokenItem(payload, options = {}) {
                 `Invalid custom token: ${token}`,
             );
         }
-        // Workers 幂等更新：KV cacheTtl 可能导致前端 DELETE+POST 读到旧数据
-        // 遇到重复 token 时先删除旧的，再创建新的（而非报错）
-        const tokens = $.read(TOKENS_KEY) || [];
-        const existingIndex = tokens.findIndex(
-            (item) =>
-                item.token === token &&
-                item.type === type &&
-                item.name === name,
-        );
-        if (existingIndex >= 0) {
-            tokens.splice(existingIndex, 1);
-            $.write(tokens, TOKENS_KEY);
-        }
     }
 
     if (type === 'col') {
@@ -325,6 +312,21 @@ function createTokenItem(payload, options = {}) {
                 }
               : {}),
     };
+    // Idempotent update on Workers: KV cacheTtl may let the frontend DELETE+POST
+    // read stale data, so a duplicate token is replaced instead of rejected.
+    // This must run after all validations pass; otherwise an invalid request
+    // would delete an existing live token before throwing.
+    if (token) {
+        const existingIndex = tokens.findIndex(
+            (item) =>
+                item.token === token &&
+                item.type === type &&
+                item.name === name,
+        );
+        if (existingIndex >= 0) {
+            tokens.splice(existingIndex, 1);
+        }
+    }
     insertByPosition(tokens, tokenData, getCreateItemPosition());
     $.write(tokens, TOKENS_KEY);
     return tokenData;

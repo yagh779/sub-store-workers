@@ -1,7 +1,5 @@
 /** Sub-Store Workers Express 适配层 */
 
-import { ENV } from './open-api';
-
 export default function express({ substore: $ }) {
     const DEFAULT_HEADERS = {
         'Content-Type': 'text/plain;charset=UTF-8',
@@ -98,12 +96,16 @@ export default function express({ substore: $ }) {
         // 构建 req 对象
         const req = {
             method,
-            url: request.url,
+            url: url.pathname + url.search,
             path,
             query,
             params: {},
             headers,
             body,
+            socket: {
+                remoteAddress:
+                    request.headers.get('cf-connecting-ip') || undefined,
+            },
             _parsedUrl: { pathname: path },
         };
 
@@ -119,6 +121,25 @@ export default function express({ substore: $ }) {
 
         const res = {
             req, // 反向引用
+            // Upstream response-transformer relies on statusCode / getHeaders();
+            // without them header transforms cannot see headers such as the
+            // already-set Content-Type, and the status stays 200.
+            get statusCode() {
+                return resStatusCode;
+            },
+            set statusCode(code) {
+                resStatusCode = code;
+            },
+            getHeaders() {
+                return { ...resHeaders };
+            },
+            getHeader(key) {
+                const target = String(key).toLowerCase();
+                for (const name of Object.keys(resHeaders)) {
+                    if (name.toLowerCase() === target) return resHeaders[name];
+                }
+                return undefined;
+            },
             status(code) {
                 resStatusCode = code;
                 return this;
@@ -258,10 +279,12 @@ export default function express({ substore: $ }) {
             req.route = { path: handler.pattern };
             const cb = handler.callback;
             try {
-                if (cb.constructor.name === 'AsyncFunction') {
-                    await cb(req, res, () => {});
-                } else {
-                    cb(req, res, () => {});
+                // Await any thenable, not only `async` functions: a plain
+                // function returning a Promise was previously not awaited, so
+                // the response could be lost / fall through to a premature 404.
+                const ret = cb(req, res, () => {});
+                if (ret && typeof ret.then === 'function') {
+                    await ret;
                 }
             } catch (err) {
                 res.status(500).json({
@@ -282,7 +305,7 @@ function patternMatched(pattern, path) {
     if (pattern instanceof RegExp && pattern.test(path)) {
         return true;
     } else {
-        if (pattern === '/') return true;
+        if (pattern === '/') return path === '/';
         if (pattern.indexOf(':') === -1) {
             const spath = path.split('/');
             const spattern = pattern.split('/');
@@ -314,7 +337,10 @@ function extractPathParams(pattern, path) {
             while (path[j] !== '/' && j < path.length) {
                 val.push(path[j++]);
             }
-            params[key.join('')] = decodeURIComponent(val.join(''));
+            // path was already decoded once in handleRequest; do not decode
+            // again here, otherwise params containing % get corrupted (and a
+            // stray % throws URIError, producing a 500).
+            params[key.join('')] = val.join('');
         } else {
             if (pattern[i] !== path[j]) {
                 return null;

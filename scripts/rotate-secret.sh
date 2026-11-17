@@ -16,6 +16,7 @@ WORKER_NAME=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -l|--length)
+            [[ $# -ge 2 ]] || { echo "Option $1 requires a value" >&2; exit 1; }
             LENGTH="$2"
             shift 2
             ;;
@@ -24,6 +25,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -n|--name)
+            [[ $# -ge 2 ]] || { echo "Option $1 requires a value" >&2; exit 1; }
             WORKER_NAME="$2"
             shift 2
             ;;
@@ -37,6 +39,13 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Validate as digits first, so LENGTH is never evaluated as an arithmetic
+# expression (which could allow command-substitution injection).
+if [[ ! "$LENGTH" =~ ^[0-9]+$ ]]; then
+    echo "Password length must be an integer." >&2
+    exit 1
+fi
 
 if [[ "$LENGTH" -lt 16 ]]; then
     echo "密码长度不能小于 16 位。" >&2
