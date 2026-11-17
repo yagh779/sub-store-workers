@@ -25,12 +25,8 @@ import registerParserRoutes from '@/restful/parser';
 import registerLogRoutes from '@/restful/logs';
 import registerAgeRoutes from '@/restful/age';
 
-import { produceArtifact } from '@/restful/sync';
-import { syncToGist } from '@/restful/artifacts';
-import { gistBackupAction } from '@/restful/miscs';
 import { consumeShareToken } from '@/restful/token';
-import { SETTINGS_KEY, ARTIFACTS_KEY, SUBS_KEY, COLLECTIONS_KEY } from '@/constants';
-import { findByName } from '@/utils/database';
+import { SETTINGS_KEY } from '@/constants';
 import {
     normalizeBackendPath,
     matchesBackendPath,
@@ -89,16 +85,6 @@ registerLogRoutes($app);
 registerAgeRoutes($app);
 
 export default {
-    // 定时同步
-    async scheduled(event, env, ctx) {
-        const kvError = validateKVBinding(env);
-        if (kvError) {
-            console.error(`[Cron] ${kvError.message}`);
-            return;
-        }
-        ctx.waitUntil(cronSyncArtifacts(env));
-    },
-
     async fetch(request, env, ctx) {
         try {
             const kvError = validateKVBinding(env);
@@ -243,152 +229,4 @@ function validateKVBinding(env) {
             'Missing KV binding: SUB_STORE_DATA. Please bind a Cloudflare KV namespace named SUB_STORE_DATA before running Sub-Store Workers.',
         ),
     };
-}
-
-/** 定时同步 artifacts 到 Gist */
-async function cronSyncArtifacts(env) {
-    try {
-        globalThis.__workerEnv = env;
-        await $.initFromKV(env.SUB_STORE_DATA);
-        $.workerEnv = env;
-
-        console.log(`[Cron] Sub-Store Workers v${version} 开始同步...`);
-
-        const settings = $.read(SETTINGS_KEY);
-        if (!settings?.githubUser || !settings?.gistToken) {
-            console.log('[Cron] 未配置 GitHub Token，跳过同步');
-            return;
-        }
-
-        const allArtifacts = $.read(ARTIFACTS_KEY);
-        if (!allArtifacts || allArtifacts.length === 0) {
-            console.log('[Cron] 无 artifacts，跳过同步');
-            return;
-        }
-
-        const shouldSync = allArtifacts.some((a) => a.sync);
-        if (!shouldSync) {
-            console.log('[Cron] 无需同步的配置');
-            return;
-        }
-
-        // 收集需要同步的订阅名
-        const allSubs = $.read(SUBS_KEY);
-        const allCols = $.read(COLLECTIONS_KEY);
-        const subNames = [];
-        let enabledCount = 0;
-
-        for (const artifact of allArtifacts) {
-            if (artifact.sync && artifact.source) {
-                enabledCount++;
-                if (artifact.type === 'subscription') {
-                    const sub = findByName(allSubs, artifact.source);
-                    if (sub?.url && !subNames.includes(artifact.source)) {
-                        subNames.push(artifact.source);
-                    }
-                } else if (artifact.type === 'collection') {
-                    const col = findByName(allCols, artifact.source);
-                    if (col?.subscriptions) {
-                        for (const sn of col.subscriptions) {
-                            const sub = findByName(allSubs, sn);
-                            if (sub?.url && !subNames.includes(sn)) {
-                                subNames.push(sn);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (enabledCount === 0) {
-            console.log('[Cron] 无启用同步的配置');
-            return;
-        }
-
-        // 预生成订阅缓存
-        if (subNames.length > 0) {
-            await Promise.all(
-                subNames.map(async (name) => {
-                    try {
-                        await produceArtifact({ type: 'subscription', name, awaitCustomCache: true });
-                    } catch (e) { /* 忽略 */ }
-                }),
-            );
-        }
-
-        // 生成所有 artifacts
-        const files = {};
-        const valid = [];
-        const invalid = [];
-
-        await Promise.all(
-            allArtifacts.map(async (artifact) => {
-                try {
-                    if (!artifact.sync || !artifact.source) return;
-                    console.log(`[Cron] 正在同步：${artifact.name}...`);
-
-                    const output = await produceArtifact({
-                        type: artifact.type,
-                        name: artifact.source,
-                        platform: artifact.platform,
-                        produceOpts: {
-                            'include-unsupported-proxy': artifact.includeUnsupportedProxy,
-                            useMihomoExternal: artifact.platform === 'SurgeMac',
-                            prettyYaml: artifact.prettyYaml,
-                        },
-                    });
-
-                    files[encodeURIComponent(artifact.name)] = { content: output };
-                    valid.push(artifact.name);
-                } catch (e) {
-                    console.error(`[Cron] 生成 ${artifact.name} 失败: ${e.message ?? e}`);
-                    invalid.push(artifact.name);
-                }
-            }),
-        );
-
-        console.log(`[Cron] 成功 ${valid.length} 个，失败 ${invalid.length} 个`);
-
-        if (valid.length === 0) {
-            console.error('[Cron] 全部失败，跳过上传');
-            return;
-        }
-
-        // 上传到 Gist
-        const resp = await syncToGist(files);
-        const body = JSON.parse(resp.body);
-
-        // 更新 artifact URL
-        for (const artifact of allArtifacts) {
-            if (artifact.sync && artifact.source && valid.includes(artifact.name)) {
-                artifact.updated = new Date().getTime();
-                let gistFiles = body.files;
-                let isGitLab;
-                if (Array.isArray(gistFiles)) {
-                    isGitLab = true;
-                    gistFiles = Object.fromEntries(gistFiles.map((item) => [item.path, item]));
-                }
-                const raw_url = gistFiles[encodeURIComponent(artifact.name)]?.raw_url;
-                artifact.url = isGitLab ? raw_url : raw_url?.replace(/\/raw\/[^/]*\/(.*)/, '/raw/$1');
-            }
-        }
-
-        $.write(allArtifacts, ARTIFACTS_KEY);
-
-        // Gist 备份上传
-        try {
-            console.log('[Cron] 上传 Gist 备份...');
-            await gistBackupAction('upload');
-            console.log('[Cron] Gist 备份完成');
-        } catch (e) {
-            console.error(`[Cron] Gist 备份失败: ${e.message ?? e}`);
-        }
-
-        await $.persistCache();
-        console.log('[Cron] 同步完成');
-    } catch (e) {
-        console.error(`[Cron] 同步失败: ${e.message ?? e}`);
-        // 尝试回写
-        try { await $.persistCache(); } catch (_) {}
-    }
 }

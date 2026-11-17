@@ -33,8 +33,19 @@ Sub-Store 后端的 Cloudflare Workers 移植版
 - **完整功能**：复用原始后端全部业务逻辑（订阅管理、格式转换、下载、预览等）
 - **预编译解析器**：peggy 文法在构建时编译，避免运行时 eval()
 
+## 本 fork 改动说明
+
+本仓库是 [Yu9191/sub-store-workers](https://github.com/Yu9191/sub-store-workers) 的定制 fork，相对上游做了以下调整：
+
+- **移除内置 Cron 定时同步**：删除 `src/index.js` 中的 `scheduled()` 处理器与 `cronSyncArtifacts()` 函数，不再在部署后自动把 artifacts 同步到 Gist，也不再自动 Gist 备份；`/api/utils/worker-status` 的 `capabilities.cron` 返回 `false`。如有需要，可自行配置 Cloudflare Cron Trigger 触发，或在前端手动执行 Gist 备份。
+- **自定义前端域名**：根路径 302 跳转及后端提示文案中的官方前端地址，由 `https://sub-store.vercel.app` 改为 `https://sub.xream.eu.org`。
+- **移除部署用 Cron 配置**：`wrangler.toml` 不再配置 `[triggers] crons`（相关说明已从下文删除）。
+
+> 除上述改动外，其余业务逻辑与上游保持一致。
+
 ## 目录
 
+- [本 fork 改动说明](#本-fork-改动说明)
 - [部署](#部署)（核心流程，建议从这里开始）
 - [进阶配置 / 平台说明](#进阶配置--平台说明)（推送、环境变量、本地开发等，已折叠）
 - [FAQ](#faq)
@@ -73,7 +84,7 @@ esbuild.js                    ← 构建脚本，通过插件桥接两者
 > 为什么两个都要部？`*.workers.dev` 在国内被 GFW 封锁，`*.pages.dev` 走 Cloudflare CDN 通常可直连。
 >
 > - **有自定义域名**：只用 Workers 即可
-> - **无自定义域名**：Pages 对外提供 API，Workers 在后台跑 Cron。
+> - **无自定义域名**：Pages 对外提供 API，Workers 也可直接作为后端使用。
 
 ### 1. 克隆仓库
 
@@ -116,13 +127,13 @@ id = "你的KV命名空间ID"
 
 | 部署方式 | 域名 | 用途 |
 |---|---|---|
-| **Workers** | `*.workers.dev` 或自定义域名 | API + Cron 定时同步 |
+| **Workers** | `*.workers.dev` 或自定义域名 | API |
 | **Pages** | `*.pages.dev` | API（国内可直连） |
 
 > ⚠️ **执行下方部署命令前，请先确认已完成「1. 克隆仓库」「2. 登录 Cloudflare」「3. 创建 KV 命名空间」三步**，并完整阅读下文「5. 连接前端」「6. API 鉴权」两节。**部署完未设密码前 Worker 是公开的，任何人都能管理你的数据。**
 
 ```bash
-# Workers 部署（含 Cron Triggers）
+# Workers 部署
 npm run deploy
 
 # Pages 部署（国内可用，一条命令）
@@ -160,7 +171,7 @@ npm run deploy:pages
 
 ### 5. 连接前端
 
-打开 [Sub-Store 前端](https://sub-store.vercel.app)，后端地址格式：
+打开 [Sub-Store 前端](https://sub.xream.eu.org)，后端地址格式：
 
 ```text
 你的域名/你的密码
@@ -321,7 +332,7 @@ https://你的域名/你的密码/api/utils/worker-status
 - `kv.bound`：是否已正确绑定 KV
 - `auth.backendPathConfigured`：是否已配置鉴权
 - `auth.managementApiPublic`：管理 API 是否处于公开状态
-- `capabilities`：当前部署支持/不支持的能力（脚本操作、Gist 备份、Cron 等）
+- `capabilities`：当前部署支持/不支持的能力（脚本操作、Gist 备份等）
 
 **脚本操作（Script Operator）**：Cloudflare Workers 禁止 `eval` / `new Function`，本仓库通过 QuickJS WASM 沙箱执行 Script Operator，**默认启用**，无需额外配置。如需关闭，可在 `wrangler.toml [vars]` 设置 `SCRIPT_ENGINE = "disabled"`。
 
@@ -340,22 +351,6 @@ https://你的域名/你的密码/api/utils/worker-status
 </details>
 
 <details>
-<summary><b>Cron 定时同步</b></summary>
-
-Workers 版内置了 Cron Trigger，默认每天 **23:55（北京时间）** 自动同步 artifacts 到 Gist。
-
-可在 `wrangler.toml` 修改频率：
-
-```toml
-[triggers]
-crons = ["55 15 * * *"]  # UTC 时间，+8 即北京时间
-```
-
-> 前提：在前端 Settings 中配置好 GitHub 用户名和 Gist Token。
-
-</details>
-
-<details>
 <summary><b>KV 读写优化</b></summary>
 
 Cloudflare KV 免费额度：读 10 万次/天，**写 1000 次/天**。
@@ -370,7 +365,6 @@ Cloudflare KV 免费额度：读 10 万次/天，**写 1000 次/天**。
 |---|---|---|
 | 打开前端浏览数据（~8 个请求） | 1 次（其余命中缓存） | 0 次 |
 | 修改订阅/设置 | 0~1 次 | 1 次 |
-| Cron 定时同步 | 1 次 | 1 次 |
 
 个人使用完全不用担心超额。
 
@@ -408,9 +402,9 @@ Cloudflare KV 免费额度：读 10 万次/天，**写 1000 次/天**。
 | 自定义 HTTP/SOCKS5 代理 | `cloudflare:sockets` 的 `connect()` 可对任意外部主机建立出站 TCP 连接并支持 `startTls()`，可用纯 JS 实现代理客户端。注意：必须在 handler 内创建（不能在全局作用域），且不能连 Cloudflare IP 段、私有 IP、端口 25 |
 | 前端静态文件托管 | 不需要 `fs` —— Workers 原生支持 Static Assets（`[assets]` 配置 + `run_worker_first` 让 `/api/*` 先走 Worker），或直接用 Pages 托管前端 |
 | 前端代理中间件 | `http-proxy-middleware` 是 Node 库，但代理功能本身在 Workers 里就是 `fetch(newUrl, request)` |
-| MMDB IP 查询 / 定时下载 | MMDB 格式是二分查找树、支持随机访问，不需整体加载：存 R2 + range read 即可；`fs.writeFile` → R2 put，Cron 已在用 |
+| MMDB IP 查询 / 定时下载 | MMDB 格式是二分查找树、支持随机访问，不需整体加载：存 R2 + range read 即可；`fs.writeFile` → R2 put，可配合 Cloudflare Cron Trigger 自行实现 |
 | `DATA_URL` 启动恢复 | 本项目存储本来就走 KV 而非 fs，覆写为写 KV 即可 |
-| Gist 备份定时下载 | `scheduled()` 已在用（见 Cron 同步），加一个下载分支即可。手动触发目前可用 |
+| Gist 备份定时下载 | 可通过 Cloudflare Cron Trigger 触发，加一个下载分支即可。手动触发目前可用 |
 | `ip-flag-node.js` 脚本 | 依赖本地 MMDB；当前用 `ip-flag.js`（HTTP API）替代，MMDB 改走 R2 后即可支持 |
 
 </details>
